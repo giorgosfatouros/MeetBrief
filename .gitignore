@@ -151,10 +151,8 @@ cython_debug/
 # Recordings (system audio capture output)
 recordings/
 
-# Reports and output files
-reports/*.md
-reports/*.json
-reports/*.txt
+# Reports and output files (timestamped run output)
+reports/
 !reports/.gitkeep
 
 # Temporary files
