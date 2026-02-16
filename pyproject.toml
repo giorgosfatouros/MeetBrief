@@ -1,0 +1,31 @@
+[project]
+name = "meetbrief"
+version = "0.1.0"
+description = "Turn meeting recordings into clean transcripts and structured summaries"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "typer[all]>=0.12.0",
+    "openai>=2.0.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.12.0",
+]
+
+[project.scripts]
+meetbrief = "meetbrief.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
