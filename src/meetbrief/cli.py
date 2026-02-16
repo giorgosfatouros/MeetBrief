@@ -255,6 +255,10 @@ def record(
     source: Optional[str] = typer.Option(
         None, "--source", "-s", help="Audio source identifier (auto-detected if not set)"
     ),
+    include_mic: bool = typer.Option(
+        True, "--include-mic/--no-include-mic", "-m",
+        help="Record from default microphone and mix with system audio (default: on). Use --no-include-mic for system audio only."
+    ),
     list_sources: bool = typer.Option(
         False, "--list-sources", help="List available audio sources and exit"
     ),
@@ -303,6 +307,7 @@ def record(
                 output_path=output,
                 source=source,
                 duration=duration,
+                include_mic=include_mic,
             )
             console.print(f"[green]✓[/green] Recording saved to: {recorded_file}")
 

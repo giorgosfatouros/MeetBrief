@@ -136,12 +136,12 @@ def test_find_monitor_source_avfoundation(mock_list, mock_detect):
 @patch("meetbrief.record.find_monitor_source")
 @patch("meetbrief.record._run_recording")
 def test_record_system_audio_pulse(mock_run, mock_find, mock_detect):
-    """Test recording with PulseAudio."""
+    """Test recording with PulseAudio (system only, no mic)."""
     mock_detect.return_value = "pulse"
     mock_find.return_value = "default.monitor"
     mock_run.return_value = Path("output.wav")
-    
-    output = record.record_system_audio(Path("output.wav"))
+
+    output = record.record_system_audio(Path("output.wav"), include_mic=False)
     assert output == Path("output.wav")
     mock_run.assert_called_once()
 
@@ -150,12 +150,12 @@ def test_record_system_audio_pulse(mock_run, mock_find, mock_detect):
 @patch("meetbrief.record.find_monitor_source")
 @patch("meetbrief.record._run_recording")
 def test_record_system_audio_avfoundation(mock_run, mock_find, mock_detect):
-    """Test recording with AVFoundation."""
+    """Test recording with AVFoundation (system only, no mic)."""
     mock_detect.return_value = "avfoundation"
     mock_find.return_value = "1"
     mock_run.return_value = Path("output.wav")
-    
-    output = record.record_system_audio(Path("output.wav"))
+
+    output = record.record_system_audio(Path("output.wav"), include_mic=False)
     assert output == Path("output.wav")
     mock_run.assert_called_once()
 
@@ -204,21 +204,92 @@ def test_run_recording_failure(mock_exists, mock_popen):
 
 @patch("meetbrief.record.detect_audio_system")
 def test_list_audio_sources_pulse(mock_detect):
-    """Test listing audio sources for PulseAudio."""
+    """Test listing audio sources for PulseAudio (monitors + mics with labels)."""
     mock_detect.return_value = "pulse"
-    
-    with patch("meetbrief.record._list_pulse_sources") as mock_list:
-        mock_list.return_value = [("0", "default.monitor")]
+
+    with patch("meetbrief.record._list_pulse_sources_with_kind") as mock_list:
+        mock_list.return_value = [("0", "default.monitor (system)")]
         sources = record.list_audio_sources()
         assert len(sources) == 1
+        assert sources[0][1] == "default.monitor (system)"
 
 
 @patch("meetbrief.record.detect_audio_system")
 def test_list_audio_sources_avfoundation(mock_detect):
     """Test listing audio sources for AVFoundation."""
     mock_detect.return_value = "avfoundation"
-    
+
     with patch("meetbrief.record._list_avfoundation_sources") as mock_list:
         mock_list.return_value = [("0", "Built-in Microphone")]
         sources = record.list_audio_sources()
         assert len(sources) == 1
+
+
+@patch("meetbrief.record.detect_audio_system")
+@patch("subprocess.run")
+def test_find_default_microphone_source_pulse(mock_run, mock_detect):
+    """Test finding default microphone on Pulse (first input when default is monitor)."""
+    mock_detect.return_value = "pulse"
+    mock_run.return_value = MagicMock(returncode=0, stdout="alsa_output.default.monitor\n")
+
+    with patch("meetbrief.record._list_pulse_input_sources") as mock_inputs:
+        mock_inputs.return_value = [("2", "alsa_input.usb-Mic.analog-mono")]
+        source = record.find_default_microphone_source()
+        assert source == "2"
+
+
+@patch("meetbrief.record.detect_audio_system")
+@patch("subprocess.run")
+def test_find_default_microphone_source_pulse_uses_default_if_input(mock_run, mock_detect):
+    """Test finding default microphone when pactl default is already an input."""
+    mock_detect.return_value = "pulse"
+    mock_run.return_value = MagicMock(returncode=0, stdout="alsa_input.usb-Mic.analog-mono\n")
+
+    with patch("meetbrief.record._list_pulse_input_sources") as mock_inputs:
+        mock_inputs.return_value = [
+            ("1", "other"),
+            ("2", "alsa_input.usb-Mic.analog-mono"),
+        ]
+        source = record.find_default_microphone_source()
+        # pactl get-default-source returns the source name; we match by name
+        assert source == "2"
+
+
+@patch("meetbrief.record.detect_audio_system")
+@patch("meetbrief.record.find_monitor_source")
+@patch("meetbrief.record.find_default_microphone_source")
+@patch("meetbrief.record._run_recording")
+def test_record_system_audio_pulse_include_mic(mock_run, mock_find_mic, mock_find_monitor, mock_detect):
+    """Test that include_mic=True builds ffmpeg command with two pulse inputs and amix."""
+    mock_detect.return_value = "pulse"
+    mock_find_monitor.return_value = "monitor.source"
+    mock_find_mic.return_value = "mic.source"
+    mock_run.return_value = Path("output.wav")
+
+    record.record_system_audio(Path("output.wav"), include_mic=True)
+
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    assert cmd[0] == "ffmpeg"
+    # Two pulse inputs: -f pulse -i <source> appears twice
+    assert cmd.count("-i") == 2
+    assert "amix=inputs=2:duration=longest" in " ".join(cmd)
+    assert "-filter_complex" in cmd
+    assert "[aout]" in cmd
+
+
+@patch("meetbrief.record.detect_audio_system")
+@patch("meetbrief.record.find_monitor_source")
+@patch("meetbrief.record._run_recording")
+def test_record_system_audio_pulse_no_include_mic(mock_run, mock_find, mock_detect):
+    """Test that include_mic=False uses single source (unchanged behaviour)."""
+    mock_detect.return_value = "pulse"
+    mock_find.return_value = "default.monitor"
+    mock_run.return_value = Path("output.wav")
+
+    record.record_system_audio(Path("output.wav"), include_mic=False)
+
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    assert "-f" in cmd and "pulse" in cmd and "-i" in cmd
+    assert "amix" not in " ".join(cmd)

@@ -89,11 +89,14 @@ meetbrief summarize reports/2025-02-16-14-30-22/raw_transcript.json --title "Wee
 
 ### Record system audio
 
-Record from system audio (e.g. Zoom, Meet, Teams). Default: save under `recordings/` (git-ignored), then run the pipeline.
+Record from system audio (e.g. Zoom, Meet, Teams). Default: save under `recordings/` (git-ignored), then run the pipeline. **By default both system output and your microphone are recorded** (mixed), so both sides of the call are captured. Use `--no-include-mic` to record system audio only.
 
 ```bash
 # Record until Ctrl+C, then process
 meetbrief record --title "Team Meeting"
+
+# System audio only (no microphone)
+meetbrief record --no-include-mic --title "Team Meeting"
 
 # Fixed duration (seconds)
 meetbrief record --duration 60 --no-auto-process
@@ -101,7 +104,7 @@ meetbrief record --duration 60 --no-auto-process
 # Custom output path
 meetbrief record -o /path/to/meeting.wav
 
-# List audio sources
+# List audio sources (system and microphone)
 meetbrief record --list-sources
 ```
 
@@ -113,6 +116,7 @@ meetbrief record --list-sources
 | `--language`, `-l` | Language code (e.g. `en`, `es`) |
 | `--auto-process` / `--no-auto-process` | Run pipeline after recording (default: on) |
 | `--source`, `-s` | Audio source (auto-detected if not set) |
+| `--include-mic` / `--no-include-mic`, `-m` | Record system + microphone (default: on). Use `--no-include-mic` for system audio only. |
 | `--output-dir` | Report output directory when auto-processing (default: `reports/`) |
 
 ## Output layout

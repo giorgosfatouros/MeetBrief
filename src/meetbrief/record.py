@@ -98,7 +98,8 @@ def list_audio_sources() -> List[Tuple[str, str]]:
     """List available audio sources for recording.
 
     Returns:
-        List of tuples (source_id, description) for available audio sources
+        List of tuples (source_id, description). On Pulse, description includes
+        " (system)" for monitors and " (microphone)" for inputs.
 
     Raises:
         RecordingError: If sources cannot be listed
@@ -106,7 +107,7 @@ def list_audio_sources() -> List[Tuple[str, str]]:
     audio_system = detect_audio_system()
 
     if audio_system in ("pulse", "pipewire"):
-        return _list_pulse_sources()
+        return _list_pulse_sources_with_kind()
     elif audio_system == "avfoundation":
         return _list_avfoundation_sources()
 
@@ -151,6 +152,48 @@ def _list_pulse_sources() -> List[Tuple[str, str]]:
         )
 
     return sources
+
+
+def _list_pulse_input_sources() -> List[Tuple[str, str]]:
+    """List PulseAudio/PipeWire input sources (microphones), excluding monitors.
+
+    Returns:
+        List of tuples (source_id, description)
+    """
+    try:
+        result = subprocess.run(
+            ["pactl", "list", "sources", "short"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        raise RecordingError(
+            f"Failed to list audio sources: {e}\n"
+            "Make sure pulseaudio-utils or pipewire-pulse is installed."
+        ) from e
+
+    sources = []
+    for line in result.stdout.strip().split("\n"):
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            source_id = parts[0].strip()
+            description = parts[1].strip() if len(parts) > 1 else source_id
+            # Exclude monitor sources (we want actual inputs only)
+            if ".monitor" not in source_id and "monitor" not in description.lower():
+                sources.append((source_id, description))
+    return sources
+
+
+def _list_pulse_sources_with_kind() -> List[Tuple[str, str]]:
+    """List Pulse sources with (system) / (microphone) labels for CLI display."""
+    monitors = _list_pulse_sources()
+    inputs = _list_pulse_input_sources()
+    result = [(sid, f"{desc} (system)") for sid, desc in monitors]
+    result.extend((sid, f"{desc} (microphone)") for sid, desc in inputs)
+    return result
 
 
 def _list_avfoundation_sources() -> List[Tuple[str, str]]:
@@ -240,12 +283,69 @@ def find_monitor_source() -> str:
     raise RecordingError(f"Unsupported audio system: {audio_system}")
 
 
+def find_default_microphone_source() -> str:
+    """Find the default microphone (input) source for recording.
+
+    On Pulse: uses pactl default source if it is not a monitor, otherwise
+    the first non-monitor source. Required for --include-mic.
+
+    Returns:
+        Source identifier for the default microphone
+
+    Raises:
+        RecordingError: If no microphone source is found
+    """
+    audio_system = detect_audio_system()
+
+    if audio_system in ("pulse", "pipewire"):
+        inputs = _list_pulse_input_sources()
+        if not inputs:
+            raise RecordingError(
+                "No microphone sources found. Use --list-sources to see available sources."
+            )
+        try:
+            result = subprocess.run(
+                ["pactl", "get-default-source"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                default_id = result.stdout.strip()
+                if ".monitor" not in default_id:
+                    for source_id, name in inputs:
+                        if source_id == default_id or name == default_id:
+                            return source_id
+                return inputs[0][0]
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return inputs[0][0]
+
+    elif audio_system == "avfoundation":
+        sources = _list_avfoundation_sources()
+        if not sources:
+            raise RecordingError("No audio devices found")
+        for device_index, device_name in sources:
+            name_lower = device_name.lower()
+            if "blackhole" in name_lower:
+                continue
+            if "microphone" in name_lower or "mic" in name_lower or "input" in name_lower:
+                return device_index
+        for device_index, device_name in sources:
+            if "blackhole" not in device_name.lower():
+                return device_index
+        return sources[0][0]
+
+    raise RecordingError(f"Unsupported audio system: {audio_system}")
+
+
 def record_system_audio(
     output_path: Path,
     source: Optional[str] = None,
     duration: Optional[int] = None,
     sample_rate: int = 16000,
     channels: int = 1,
+    include_mic: bool = True,
 ) -> Path:
     """Record system audio to a file.
 
@@ -255,6 +355,8 @@ def record_system_audio(
         duration: Optional duration in seconds (None = record until stopped)
         sample_rate: Audio sample rate (default: 16kHz for Whisper)
         channels: Number of audio channels (default: 1 = mono)
+        include_mic: If True (default), record from default microphone and mix
+            with system audio (so your voice is included in the recording).
 
     Returns:
         Path to the recorded audio file
@@ -268,9 +370,13 @@ def record_system_audio(
     audio_system = detect_audio_system()
 
     if audio_system in ("pulse", "pipewire"):
-        return _record_pulse(output_path, source, duration, sample_rate, channels)
+        return _record_pulse(
+            output_path, source, duration, sample_rate, channels, include_mic
+        )
     elif audio_system == "avfoundation":
-        return _record_avfoundation(output_path, source, duration, sample_rate, channels)
+        return _record_avfoundation(
+            output_path, source, duration, sample_rate, channels, include_mic
+        )
 
     raise RecordingError(f"Unsupported audio system: {audio_system}")
 
@@ -281,35 +387,51 @@ def _record_pulse(
     duration: Optional[int],
     sample_rate: int,
     channels: int,
+    include_mic: bool = False,
 ) -> Path:
     """Record using PulseAudio/PipeWire.
 
     Args:
         output_path: Output file path
-        source: Audio source (auto-detected if None)
+        source: Audio source (auto-detected if None) - monitor for system audio
         duration: Optional duration in seconds
         sample_rate: Sample rate
         channels: Number of channels
+        include_mic: If True, mix monitor with default microphone
 
     Returns:
         Path to recorded file
     """
-    if source is None:
-        source = find_monitor_source()
-
-    cmd = [
-        "ffmpeg",
-        "-f",
-        "pulse",
-        "-i",
-        source,
-        "-ar",
-        str(sample_rate),
-        "-ac",
-        str(channels),
-        "-y",  # overwrite
-        str(output_path),
-    ]
+    if include_mic:
+        monitor = source if source else find_monitor_source()
+        mic = find_default_microphone_source()
+        # Resample both to same rate and mix; -ac applies mono after amix
+        filter_complex = (
+            f"[0:a]aresample={sample_rate}[a0];"
+            f"[1:a]aresample={sample_rate}[a1];"
+            "[a0][a1]amix=inputs=2:duration=longest[aout]"
+        )
+        cmd = [
+            "ffmpeg",
+            "-f", "pulse", "-i", monitor,
+            "-f", "pulse", "-i", mic,
+            "-filter_complex", filter_complex,
+            "-map", "[aout]",
+            "-ac", str(channels),
+            "-y",
+            str(output_path),
+        ]
+    else:
+        if source is None:
+            source = find_monitor_source()
+        cmd = [
+            "ffmpeg",
+            "-f", "pulse", "-i", source,
+            "-ar", str(sample_rate),
+            "-ac", str(channels),
+            "-y",
+            str(output_path),
+        ]
 
     if duration:
         cmd.extend(["-t", str(duration)])
@@ -323,37 +445,50 @@ def _record_avfoundation(
     duration: Optional[int],
     sample_rate: int,
     channels: int,
+    include_mic: bool = False,
 ) -> Path:
     """Record using AVFoundation (macOS).
 
     Args:
         output_path: Output file path
-        source: Audio device index (auto-detected if None)
+        source: Audio device index (auto-detected if None) - system output device
         duration: Optional duration in seconds
         sample_rate: Sample rate
         channels: Number of channels
+        include_mic: If True, mix system device with default microphone
 
     Returns:
         Path to recorded file
     """
-    if source is None:
-        source = find_monitor_source()
-
-    # AVFoundation format: ":audio_device_index"
-    # The colon prefix indicates we're only recording audio (no video)
-    cmd = [
-        "ffmpeg",
-        "-f",
-        "avfoundation",
-        "-i",
-        f":{source}",
-        "-ar",
-        str(sample_rate),
-        "-ac",
-        str(channels),
-        "-y",  # overwrite
-        str(output_path),
-    ]
+    if include_mic:
+        sys_source = source if source else find_monitor_source()
+        mic_source = find_default_microphone_source()
+        filter_complex = (
+            f"[0:a]aresample={sample_rate}[a0];"
+            f"[1:a]aresample={sample_rate}[a1];"
+            "[a0][a1]amix=inputs=2:duration=longest[aout]"
+        )
+        cmd = [
+            "ffmpeg",
+            "-f", "avfoundation", "-i", f":{sys_source}",
+            "-f", "avfoundation", "-i", f":{mic_source}",
+            "-filter_complex", filter_complex,
+            "-map", "[aout]",
+            "-ac", str(channels),
+            "-y",
+            str(output_path),
+        ]
+    else:
+        if source is None:
+            source = find_monitor_source()
+        cmd = [
+            "ffmpeg",
+            "-f", "avfoundation", "-i", f":{source}",
+            "-ar", str(sample_rate),
+            "-ac", str(channels),
+            "-y",
+            str(output_path),
+        ]
 
     if duration:
         cmd.extend(["-t", str(duration)])
@@ -382,11 +517,14 @@ def _run_recording(
             # Polling loop + SIGINT handler so Ctrl+C is handled even when run
             # from pipx or a different terminal (avoids blocking in wait() which
             # may not be interrupted in some environments).
+            # stdin=PIPE so we can send 'q' to ffmpeg for graceful stop and flush.
+            # stderr=PIPE so we can show ffmpeg errors if the process exits with failure.
             stderr = None
             process = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
             sigint_received = False
 
@@ -402,12 +540,33 @@ def _run_recording(
                 signal.signal(signal.SIGINT, old_sigint)
 
             if sigint_received:
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+                if process.stdin is not None:
+                    try:
+                        process.stdin.write(b"q")
+                        process.stdin.flush()
+                    except BrokenPipeError:
+                        pass
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        pass
+                    if process.poll() is None:
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.terminate()
+                            try:
+                                process.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
+                else:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
                 if output_path.exists() and output_path.stat().st_size > 0:
                     return output_path
                 raise KeyboardInterrupt()
@@ -420,7 +579,13 @@ def _run_recording(
             stdout, stderr = process.communicate()
 
         if process.returncode != 0 and process.returncode != -signal.SIGINT:
-            err_bytes = stderr if not wait_for_interrupt else None
+            if wait_for_interrupt and process.stderr is not None:
+                try:
+                    err_bytes = process.stderr.read()
+                except Exception:
+                    err_bytes = None
+            else:
+                err_bytes = stderr
             error_msg = (
                 err_bytes.decode("utf-8", errors="ignore") if err_bytes else "Unknown error"
             )

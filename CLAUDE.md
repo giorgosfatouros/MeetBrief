@@ -14,7 +14,7 @@ CLI that turns meeting audio/video into transcripts and structured summaries. Pi
 - **CLI** (`src/meetbrief/cli.py`): `run`, `transcribe`, `summarize`, `record`. Uses `utils.load_env()`, Rich progress; creates timestamped output subdir via `utils.get_timestamp_subfolder()`.
 - **Pipeline:** `run` calls ingest → transcribe → clean → enrich → export in order. Temp normalized audio is removed after transcribe. Large files (>25 MB) are chunked in ingest/transcribe via `src/meetbrief/chunk.py`.
 - **Providers:** `src/meetbrief/client.py` defines `TranscriptionClient`, `LLMClient`, and `OpenAIClient` (single implementation). Transcribe uses the transcription client; clean and enrich use the LLM client.
-- **Recording:** `src/meetbrief/record.py` handles system audio (Pulse on Linux, AVFoundation on macOS). `record` command can auto-run the pipeline after recording.
+- **Recording:** `src/meetbrief/record.py` handles system audio (Pulse on Linux, AVFoundation on macOS). By default both system output and the default microphone are recorded (mixed). Use `--no-include-mic` for system audio only. `record` command can auto-run the pipeline after recording.
 
 ## Project Structure
 
@@ -66,7 +66,7 @@ MeetBrief/
 | `meetbrief run <file>` | Full pipeline. Options: `--title`, `--language`, `--output-dir`, `--timestamps` / `--no-timestamps` |
 | `meetbrief transcribe <file>` | Transcribe only. Options: `--language`, `--output-dir` |
 | `meetbrief summarize <file>` | Enrich + export from existing transcript JSON. Options: `--title`, `--output-dir` |
-| `meetbrief record` | Record system audio; optional auto-process. Options: `-o`, `-d`, `-t`, `-l`, `--auto-process`, `-s`, `--output-dir`. `--list-sources` |
+| `meetbrief record` | Record system audio; optional auto-process. Options: `-o`, `-d`, `-t`, `-l`, `--auto-process`, `-s`, `--include-mic` / `-m` (mix mic with system audio), `--output-dir`. `--list-sources` |
 
 ## Models
 
@@ -97,7 +97,7 @@ Location: `src/meetbrief/client.py`.
 
 - **New export format:** Add function in `src/meetbrief/export.py`, call from `src/meetbrief/cli.py` in `run` and `summarize` (and record's auto-process path). Add tests in `tests/test_export.py`.
 - **Pipeline change:** Follow ingest → transcribe → clean → enrich → export; preserve timestamp handling in clean and segment list shape through enrich.
-- **Recording:** Platform-specific logic in `src/meetbrief/record.py` (`_list_pulse_sources`, `_record_pulse`, `_list_avfoundation_sources`, `_record_avfoundation`). CLI in `src/meetbrief/cli.py` `record` command.
+- **Recording:** Platform-specific logic in `src/meetbrief/record.py` (`_list_pulse_sources`, `_list_pulse_input_sources`, `find_default_microphone_source`, `_record_pulse`, `_list_avfoundation_sources`, `_record_avfoundation`). Use `--include-mic` to mix default microphone with system audio. CLI in `src/meetbrief/cli.py` `record` command.
 - **Tests:** One test file per main module; mock `OpenAIClient` / API calls to avoid network and cost.
 
 ## Pitfalls to Avoid
