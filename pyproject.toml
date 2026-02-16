@@ -1,6 +1,6 @@
 [project]
 name = "meetbrief"
-version = "0.1.0"
+version = "0.1.2"
 description = "Turn meeting recordings into clean transcripts and structured summaries"
 readme = "README.md"
 requires-python = ">=3.12"

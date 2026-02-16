@@ -3,6 +3,7 @@
 import platform
 import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -377,31 +378,52 @@ def _run_recording(
         RecordingError: If recording fails
     """
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        if wait_for_interrupt:
+            # Polling loop + SIGINT handler so Ctrl+C is handled even when run
+            # from pipx or a different terminal (avoids blocking in wait() which
+            # may not be interrupted in some environments).
+            stderr = None
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            sigint_received = False
 
-        # Wait for process to complete
-        try:
-            stdout, stderr = process.communicate()
-        except KeyboardInterrupt:
-            # Handle Ctrl+C gracefully - terminate the recording process
-            process.terminate()
+            def _handle_sigint(signum: int, frame: object) -> None:
+                nonlocal sigint_received
+                sigint_received = True
+
+            old_sigint = signal.signal(signal.SIGINT, _handle_sigint)
             try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            # Check if file was created (even if interrupted)
-            if output_path.exists() and output_path.stat().st_size > 0:
-                return output_path
-            # Re-raise to let CLI handle it
-            raise
+                while process.poll() is None and not sigint_received:
+                    time.sleep(0.25)
+            finally:
+                signal.signal(signal.SIGINT, old_sigint)
+
+            if sigint_received:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                if output_path.exists() and output_path.stat().st_size > 0:
+                    return output_path
+                raise KeyboardInterrupt()
+        else:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            stdout, stderr = process.communicate()
 
         if process.returncode != 0 and process.returncode != -signal.SIGINT:
-            error_msg = stderr.decode("utf-8", errors="ignore") if stderr else "Unknown error"
+            err_bytes = stderr if not wait_for_interrupt else None
+            error_msg = (
+                err_bytes.decode("utf-8", errors="ignore") if err_bytes else "Unknown error"
+            )
             raise RecordingError(
                 f"Recording failed with exit code {process.returncode}:\n{error_msg}"
             )
