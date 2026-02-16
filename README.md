@@ -35,11 +35,27 @@ Optional for system audio recording:
 
 ## Installation
 
+### From source (project environment)
+
 ```bash
-git clone https://github.com/giorgosfatouros/meetbrief
-cd meetbrief
+git clone https://github.com/giorgosfatouros/MeetBrief
+cd MeetBrief
 uv sync
 ```
+
+Run `meetbrief` from the project directory with `uv run meetbrief ...`, or activate the venv first (`source .venv/bin/activate` on Linux/macOS) so the `meetbrief` command is available in that terminal.
+
+### Global CLI (any terminal)
+
+To use `meetbrief` from any directory without activating the project venv, install with [pipx](https://pipx.pypa.io/):
+
+```bash
+pipx install git+https://github.com/giorgosfatouros/MeetBrief.git
+```
+
+Upgrade later with: `pipx upgrade meetbrief`.
+
+### API key
 
 Load API key from environment or `.env`:
 
