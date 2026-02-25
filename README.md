@@ -95,6 +95,12 @@ Record from system audio (e.g. Zoom, Meet, Teams). Default: save under `recordin
 # Record until Ctrl+C, then process
 meetbrief record --title "Team Meeting"
 
+# Quick start: retry with simpler defaults if setup fails
+meetbrief record --quick
+
+# Quick start without auto-processing
+meetbrief record --quick --no-auto-process
+
 # System audio only (no microphone)
 meetbrief record --no-include-mic --title "Team Meeting"
 
@@ -108,6 +114,15 @@ meetbrief record -o /path/to/meeting.wav
 meetbrief record --list-sources
 ```
 
+#### Quick start recording
+
+`meetbrief record --quick` first tries your current recording defaults. If that fails, it retries with progressively simpler fallbacks:
+
+1. Disable microphone mixing (`--no-include-mic` behavior).
+2. On Pulse/PipeWire systems, retry with `pactl get-default-source` as an explicit source.
+
+When a fallback succeeds, MeetBrief prints a "fallback used" message with next steps (`--list-sources`, `--source`, and `--no-include-mic`) so you can lock in a stable setup.
+
 | Option | Description |
 |--------|-------------|
 | `--output`, `-o` | Output file path (default: `recordings/recording_<timestamp>.wav`) |
@@ -115,6 +130,7 @@ meetbrief record --list-sources
 | `--title`, `-t` | Meeting title (for report) |
 | `--language`, `-l` | Language code (e.g. `en`, `es`) |
 | `--auto-process` / `--no-auto-process` | Run pipeline after recording (default: on) |
+| `--quick` | Enable quick-mode fallbacks: retry without mic, then with Pulse default source when available. |
 | `--source`, `-s` | Audio source (auto-detected if not set) |
 | `--include-mic` / `--no-include-mic`, `-m` | Record system + microphone (default: on). Use `--no-include-mic` for system audio only. |
 | `--output-dir` | Report output directory when auto-processing (default: `reports/`) |
